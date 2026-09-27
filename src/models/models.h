@@ -2342,6 +2342,7 @@ struct llama_model_qwen35 : public llama_model_base {
 
     struct {
         bool enabled = false;
+        uint32_t layers[2] = {2, 8};
         std::shared_ptr<llama_qwengram_ple> ple;
         ggml_tensor * key[2] = {};
         ggml_tensor * value[2] = {};

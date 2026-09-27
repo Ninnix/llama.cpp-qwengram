@@ -1,20 +1,35 @@
-# QwenGram 0.8B and 2B
+# QwenGram 0.8B, 2B and 4B
 
 The 0.8B path runs the REAL-15M R=1 reader and its linear750 arbiter. The fork inserts the reader before Qwen3.5 decoder layers 2 and 8 (zero based), reads the 16 PLE rows for each token from an external GGUF, and evaluates the reader and gate in the model graph. The PLE is mapped on the host and only selected rows are dequantized; it is not copied to the GPU. See the [0.8B model files](https://huggingface.co/Ninnix96/Qwengram-0.8B), the 2B section below, and the [study](https://github.com/Ninnix/qwen-ple-transfer).
 
-The model GGUFs contain the matching Qwen3.5 backbone, two reader projections per site, trained beta and gamma values, alpha2, and the IDX8 gate. They do not contain the PLE.
+The model GGUFs contain the matching Qwen3.5 backbone, two reader projections per site, trained beta and gamma values, the early calibration scalar, and the late linear gate. They do not contain the PLE.
 
 ## Qwengram-2B
 
-The [2B release](https://huggingface.co/Ninnix96/Qwengram-2b) uses REAL-10M + linear750 as its canonical balanced endpoint. A matched comparison of persisted 10M and 15M readers found clearer NLL gains at 15M but unresolved benchmark accuracy differences. The 15M reader and arbiter remain available as the max-LM/research endpoint. The release includes the paired intervals and both checkpoints.
+The [2B release](https://huggingface.co/Ninnix96/Qwengram-2b) uses REAL-15M + linear750. Its release card records the checkpoint selection and the paired 10M versus 15M comparison.
 
 Both models have 24 decoder layers and inject at IDX2/IDX8. The reader width follows the backbone: 1024 for 0.8B and 2048 for 2B. The query/key score is divided by sqrt(hidden width). Addressing, row order, reader projections, residual placement and arbitration formulas are unchanged. The loader checks the reader dimensions against the backbone.
 
-Use `QwenGram-2B-BF16.gguf`, `QwenGram-2B-Q8_0.gguf`, or `QwenGram-2B-Q4_K_M.gguf` with the same external PLE below. All 11 reader and gate tensors stay F32 in each GGUF. File hashes and matched CPU stock-versus-Qwengram measurements are included in the release. The Q4_1 sidecar validation reproduces 4,096 addressed rows exactly under full prefill, split prefill and token decoding, including EOS and position-zero resets. These checks concern the Q4_1 sidecar, not equality with the original FP8 memory.
+Use `QwenGram-2B-BF16.gguf`, `QwenGram-2B-Q8_0.gguf`, `QwenGram-2B-Q6_K.gguf`, or `QwenGram-2B-Q4_K_M.gguf` with the same external PLE below. All 11 reader and gate tensors stay F32 in each GGUF. File hashes and matched CPU stock-versus-Qwengram measurements are included in the release. The Q4_1 sidecar validation reproduces 4,096 addressed rows exactly under full prefill, split prefill and token decoding, including EOS and position-zero resets. These checks concern the Q4_1 sidecar, not equality with the original FP8 memory.
 
 ```sh
 export QWENGRAM_PLE="$PWD/models/qwengram/Qwen3.8-Flash-Next-PLE-Q4_1.gguf"
 build-qwengram-cpu/bin/llama-completion -m models/qwengram/QwenGram-2B-Q8_0.gguf -p 'The capital of France is' -n 16 -no-cnv -ngl 0
+```
+
+## Qwengram-4B
+
+The [4B release](https://huggingface.co/Ninnix96/Qwengram-4B) uses REAL-15M + linear750, selected by the frozen paired 10M versus 15M evaluation. The backbone has 32 decoder layers and hidden width 2560. Injection is before IDX3 and IDX11, preserving the 12.5% and 37.5% depths used by the smaller models. The reader, gate, PLE addressing and dequantization formulas are unchanged.
+
+The loader selects the fixed sites for each supported backbone and rejects conflicting `qwengram.reader_early_layer` or `qwengram.reader_late_layer` metadata. Older 0.8B and 2B GGUFs can omit these fields and retain IDX2/IDX8. The `qwengram.arbiter.alpha2` tensor name is retained for format compatibility; it denotes the early scalar at IDX3 in 4B.
+
+The release includes `QwenGram-4B-BF16.gguf`, `QwenGram-4B-Q8_0.gguf`, `QwenGram-4B-Q6_K.gguf` and `QwenGram-4B-Q4_K_M.gguf`. All 11 reader and arbiter tensors stay F32. Use the same external Q4_1 PLE; the release includes the matched runtime retention results and generation checks.
+
+On the tested AMD BC-250, BF16, Q8_0 and Q4_K_M matched the CPU eight-token greedy continuation with full Vulkan offload (`-ngl 99`). Q6_K differed at full offload but matched with `-ngl 33`, which keeps the first decoder layer on CPU. Use `-ngl 33` for Q6_K on this device, or CPU (`-ngl 0`). These short checks do not establish broad GPU parity; the published matched perplexity results use CPU.
+
+```sh
+export QWENGRAM_PLE="$PWD/models/qwengram/Qwen3.8-Flash-Next-PLE-Q4_1.gguf"
+build-qwengram-cpu/bin/llama-completion -m models/qwengram/QwenGram-4B-Q8_0.gguf -p 'The capital of France is' -n 16 -no-cnv -ngl 0
 ```
 
 The remaining file hashes and BC-250 offload observations below refer to the 0.8B release.

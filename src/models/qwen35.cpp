@@ -39,8 +39,18 @@ void llama_model_qwen35::load_arch_hparams(llama_model_loader & ml) {
     std::string version;
     qwengram.enabled = ml.get_key("qwengram.version", version, false);
     if (qwengram.enabled) {
-        if (version != "1" || hparams.n_layer() != 24 || (hparams.n_embd != 1024 && hparams.n_embd != 2048)) {
+        const bool small = hparams.n_layer() == 24 && (hparams.n_embd == 1024 || hparams.n_embd == 2048);
+        const bool four_b = hparams.n_layer() == 32 && hparams.n_embd == 2560;
+        if (version != "1" || (!small && !four_b)) {
             throw std::runtime_error("QwenGram: unsupported model version or dimensions");
+        }
+        qwengram.layers[0] = four_b ? 3 : 2;
+        qwengram.layers[1] = four_b ? 11 : 8;
+        uint32_t early = qwengram.layers[0], late = qwengram.layers[1];
+        ml.get_key("qwengram.reader_early_layer", early, false);
+        ml.get_key("qwengram.reader_late_layer", late, false);
+        if (early != qwengram.layers[0] || late != qwengram.layers[1]) {
+            throw std::runtime_error("QwenGram: injection layers differ from the supported recipe");
         }
         uint32_t hidden, memory, branches;
         ml.get_key("qwengram.reader_hidden_dim", hidden);
@@ -148,7 +158,7 @@ void llama_model_qwen35::load_arch_tensors(llama_model_loader & ml) {
     }
     if (qwengram.enabled) {
         for (int site = 0; site < 2; ++site) {
-            const int il = site == 0 ? 2 : 8;
+            const int il = qwengram.layers[site];
             qwengram.key[site]   = create_tensor(tn(LLM_TENSOR_QWENGRAM_KEY,   "weight", il), {2560, n_embd}, 0);
             qwengram.value[site] = create_tensor(tn(LLM_TENSOR_QWENGRAM_VALUE, "weight", il), {2560, n_embd}, 0);
             qwengram.beta[site]  = create_tensor(tn(LLM_TENSOR_QWENGRAM_BETA, il), {1}, 0);
@@ -217,8 +227,8 @@ llama_model_qwen35::graph::graph(const llama_model_qwen35 & model, const llm_gra
 
     // MTP/NextN layers are loaded as extra decoder blocks but not executed in the main pass.
     for (int il = 0; il < n_layer; ++il) {
-        if (qwengram_memory && (il == 2 || il == 8)) {
-            inpL = build_qwengram_reader(inpL, qwengram_memory, il == 2 ? 0 : 1);
+        if (qwengram_memory && (il == model.qwengram.layers[0] || il == model.qwengram.layers[1])) {
+            inpL = build_qwengram_reader(inpL, qwengram_memory, il == model.qwengram.layers[0] ? 0 : 1);
         }
         res->t_layer_inp[il] = inpL;
 
